@@ -189,6 +189,57 @@ class ModelConfig:
     def rope_dim_for_layer(self, layer_idx: int) -> int:
         return int(self.head_dim_for_layer(layer_idx) * self.partial_rotary_factor)
 
+    @classmethod
+    def tiny_config(cls) -> "ModelConfig":
+        emb_dim = 256
+        num_heads = 4
+        head_dim = emb_dim // num_heads
+        num_layers = 4
+        hybrid_block_size = 2  # pattern: [SWA, GA, SWA, GA]
+
+        n_routed_experts = 4
+        num_experts_per_tok = 2
+        moe_intermediate_size = 512
+        moe_layer_freq = [True] * num_layers
+
+        return cls(
+            num_layers=num_layers,
+            vocab_size=8192,
+            emb_dim=emb_dim,
+            mlp_dim=768,
+            num_heads=num_heads,
+            head_dim=head_dim,
+            num_kv_heads=2,
+            v_head_dim=head_dim,
+            rope_theta=10000.0,
+            max_position_embeddings=2048,
+            norm_eps=1e-6,
+            tie_word_embeddings=False,
+            attention_bias=False,
+            attention_dropout=0.0,
+            partial_rotary_factor=1.0,
+            hybrid_block_size=hybrid_block_size,
+            sliding_window=8,
+            swa_num_heads=num_heads,
+            swa_num_kv_heads=2,
+            swa_head_dim=head_dim,
+            swa_v_head_dim=head_dim,
+            swa_rope_theta=10000.0,
+            add_full_attention_sink_bias=False,
+            add_swa_attention_sink_bias=False,
+            n_routed_experts=n_routed_experts,
+            num_experts_per_tok=num_experts_per_tok,
+            moe_intermediate_size=moe_intermediate_size,
+            moe_layer_freq=moe_layer_freq,
+            routed_scaling_factor=1.0,
+            scoring_func="sigmoid",
+            topk_method="noaux_tc",
+            n_group=2,
+            topk_group=1,
+            norm_topk_prob=True,
+            shd_cfg=ShardingCfg.no_sharding(),
+        )
+
 
 def shard(x: jnp.ndarray, s: ShardingSpec):
     mesh = get_abstract_mesh()
@@ -257,7 +308,11 @@ def _generate_pos_embeddings(positions: jax.Array, head_dim: int, rope_theta: fl
     timescale = rope_theta**fraction
     rotational_frequency = 1.0 / timescale
     sinusoid_inp = jnp.einsum("BT,k->BTk", positions, rotational_frequency, precision=jax.lax.Precision.HIGHEST)
-    return jnp.sin(sinusoid_inp), jnp.cos(sinusoid_inp)
+    sin = jnp.sin(sinusoid_inp)
+    cos = jnp.cos(sinusoid_inp)
+    sin = jnp.concatenate([sin, sin], axis=-1)
+    cos = jnp.concatenate([cos, cos], axis=-1)
+    return sin, cos
 
 
 def rotate_half(x: jax.Array) -> jax.Array:
@@ -322,8 +377,12 @@ class MoEGate(nnx.Module):
         self.norm_topk_prob = cfg.norm_topk_prob
         self.gating_dim = cfg.emb_dim
         self.w = nnx.Param(nnx.initializers.normal()(rngs.params(), (self.n_routed_experts, self.gating_dim)))
-        self.e_score_correction_bias = None
         if self.topk_method == "noaux_tc":
+            self.e_score_correction_bias = nnx.Param(
+                nnx.initializers.zeros_init()(rngs.params(), (self.n_routed_experts,))
+            )
+        else:
+            # Keep as a Param to avoid static-attribute assignment issues in newer nnx.
             self.e_score_correction_bias = nnx.Param(
                 nnx.initializers.zeros_init()(rngs.params(), (self.n_routed_experts,))
             )

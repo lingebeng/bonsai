@@ -21,7 +21,7 @@ import safetensors
 from etils import epath
 from flax import nnx
 
-from bonsai.models.mimo import modeling as model_lib
+from modeling import model_lib
 
 
 def _layer_idx_from_jax_key(jax_key: str) -> int:
