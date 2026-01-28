@@ -27,6 +27,7 @@ def run_smoke_test() -> None:
     assert logits.shape == (batch_size, cfg.vocab_size), (
         f"unexpected logits shape: {logits.shape}"
     )
+    print(logits)
     print("jax smoke test passed: logits shape =", tuple(logits.shape))
 
 

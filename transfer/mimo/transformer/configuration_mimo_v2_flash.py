@@ -25,7 +25,7 @@ logger = logging.get_logger(__name__)
 
 class MiMoV2FlashConfig(PretrainedConfig):
 
-    model_type = ""
+    model_type = "mimo_v2_flash"
     keys_to_ignore_at_inference = ["past_key_values"]
 
     # Default tensor parallel plan for base model `Hybrid`
